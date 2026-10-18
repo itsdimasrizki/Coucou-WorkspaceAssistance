@@ -97,9 +97,24 @@ export const Bridge = {
   /** Opens the configured n8n instance in the browser. */
   openN8n: () => call<void>("open_n8n"),
 
+  // ── CLI Tools ─────────────────────────────────────────────────────────────
+  checkCliTools: () => call<CliToolInfo[]>("check_cli_tools"),
+  launchCliTool: (id: string, path: string | null) =>
+    call<boolean>("launch_cli_tool", { id, path }),
+
   /** Tray → Pause. Stops the integration pollers, not just the island. */
   setPaused: (paused: boolean) => call<void>("set_paused", { paused }),
 };
+
+export interface CliToolInfo {
+  id: string;
+  name: string;
+  command: string;
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  diagnostic: string;
+}
 
 export interface IntegrationUpdate {
   id: string;

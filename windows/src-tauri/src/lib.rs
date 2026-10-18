@@ -1,6 +1,7 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
 mod claude;
+mod cli_tools;
 mod files;
 mod hooks;
 mod integrations;
@@ -375,6 +376,16 @@ fn open_settings_window(app: AppHandle) {
     show_settings_window(&app);
 }
 
+#[tauri::command]
+fn check_cli_tools() -> Vec<cli_tools::CliToolInfo> {
+    cli_tools::check_all()
+}
+
+#[tauri::command]
+fn launch_cli_tool(id: String, path: Option<String>) -> Result<bool, String> {
+    cli_tools::launch(&id, path.as_deref())
+}
+
 pub fn run() {
     platform::prepare_environment();
     let loaded = settings::load();
@@ -421,6 +432,8 @@ pub fn run() {
             open_n8n,
             open_settings_window,
             set_paused,
+            check_cli_tools,
+            launch_cli_tool,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

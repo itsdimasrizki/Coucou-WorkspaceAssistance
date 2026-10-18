@@ -2,6 +2,7 @@
 
 import type { BotEmoteName, BotStateName, IslandMode, IslandViewName } from "./layout";
 import type { EyeShape } from "../mochi/engine";
+import type { CliToolInfo } from "./bridge";
 
 export type AgentSource = "claudeCode" | "n8n" | "agent";
 export type PillBadge = "approval" | "finished" | "error";
@@ -59,18 +60,28 @@ const task = (
 /** AgentTask.integrationAgents — same ids, names and colours as macOS. */
 export const INTEGRATION_AGENTS: AgentTask[] = [
   task("integration_claude", "VS Code", "#F5F6F8", "claudeCode"),
+  task("integration_github", "GitHub", "#F4505E", "n8n"),
+  task("integration_notion", "Notion", "#8C8C8C", "n8n"),
+  task("integration_google_calendar", "Google Calendar", "#4285F4", "n8n"),
+  task("integration_google_drive", "Google Drive", "#34A853", "n8n"),
+  task("integration_tradingview", "TradingView", "#2962FF", "n8n"),
+  task("agent_claude_cli", "Claude Code", "#D97706", "agent"),
+  task("agent_gemini", "Gemini CLI", "#8AB4F8", "agent"),
+  task("agent_antigravity", "Antigravity", "#E879F9", "agent"),
+  task("agent_codex", "Codex", "#2DD4BF", "agent"),
   task("integration_resend", "Resend", "#22C55E", "n8n"),
   task("integration_n8n", "n8n", "#F29B38", "n8n"),
   task("integration_vercel", "Vercel", "#7C5CFF", "n8n"),
-  task("integration_github", "GitHub", "#F4505E", "n8n"),
-  task("integration_notion", "Notion", "#8C8C8C", "n8n"),
   task("integration_calcom", "Cal.com", "#C9956A", "n8n"),
   task("integration_stripe", "Stripe", "#0570DE", "n8n"),
 ];
 
 export const TOGGLEABLE_INTEGRATION_IDS = [
-  "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
-  "integration_notion", "integration_calcom", "integration_stripe",
+  "integration_github", "integration_notion", "integration_google_calendar",
+  "integration_google_drive", "integration_tradingview",
+  "agent_claude_cli", "agent_gemini", "agent_antigravity", "agent_codex",
+  "integration_resend", "integration_n8n", "integration_vercel",
+  "integration_calcom", "integration_stripe",
 ];
 
 /** What an integration poller last reported. */
@@ -148,6 +159,7 @@ class AppState {
   pendingApproval: ApprovalInfo | null = null;
 
   integrations: Record<string, IntegrationInfo> = {};
+  cliTools: CliToolInfo[] = [];
 
   lastActivity = performance.now();
 

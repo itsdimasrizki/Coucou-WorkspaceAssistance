@@ -68,7 +68,9 @@ pub fn start(app: AppHandle) {
     spawn(app.clone(), "integration_resend", 6, 60, poll_resend);
     spawn(app.clone(), "integration_github", 7, 300, poll_github);
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
-    spawn(app, "integration_notion", 9, 300, poll_notion);
+    spawn(app.clone(), "integration_notion", 9, 300, poll_notion);
+    spawn(app.clone(), "integration_google_calendar", 10, 300, poll_google_calendar);
+    spawn(app, "integration_google_drive", 11, 300, poll_google_drive);
 }
 
 /// True when the user has this integration switched on in settings.
@@ -113,6 +115,8 @@ pub async fn poll_once(app: AppHandle, id: &str) {
         "integration_resend" => poll_resend(app).await,
         "integration_notion" => poll_notion(app).await,
         "integration_calcom" => poll_calcom(app).await,
+        "integration_google_calendar" => poll_google_calendar(app).await,
+        "integration_google_drive" => poll_google_drive(app).await,
         _ => {}
     }
 }
@@ -300,24 +304,125 @@ async fn poll_github(app: AppHandle) {
         .header("User-Agent", "Coucou")
         .send()
         .await;
-    let stars: i64 = match repos {
+
+    let (stars, repo_list) = match repos {
+        Ok(r) if r.status().is_success() => {
+            let list = r
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
+            let total_stars: i64 = list
+                .iter()
+                .filter_map(|r| r.get("stargazers_count").and_then(Value::as_i64))
+                .sum();
+
+            // Format repos and prioritize ML/portfolio/web
+            let mut parsed: Vec<Value> = list
+                .iter()
+                .take(30)
+                .filter_map(|r| {
+                    let name = r.get("name")?.as_str()?;
+                    let desc = r.get("description").and_then(Value::as_str).unwrap_or("");
+                    let url = r.get("html_url").and_then(Value::as_str).unwrap_or("");
+                    let lang = r.get("language").and_then(Value::as_str).unwrap_or("");
+                    let stars = r.get("stargazers_count").and_then(Value::as_i64).unwrap_or(0);
+                    let forks = r.get("forks_count").and_then(Value::as_i64).unwrap_or(0);
+                    let pushed_at = r.get("pushed_at").and_then(Value::as_str).unwrap_or("");
+
+                    let lower_name = name.to_lowercase();
+                    let lower_desc = desc.to_lowercase();
+                    let is_priority = lower_name.contains("portfolio")
+                        || lower_name.contains("ai")
+                        || lower_name.contains("ml")
+                        || lower_name.contains("web")
+                        || lower_name.contains("strukdat")
+                        || lower_name.contains("melon")
+                        || lower_name.contains("trading")
+                        || lower_desc.contains("portfolio")
+                        || lower_desc.contains("machine learning")
+                        || lower_desc.contains("deep learning")
+                        || lower_desc.contains("web");
+
+                    Some(json!({
+                        "name": name,
+                        "description": desc,
+                        "url": url,
+                        "language": lang,
+                        "stars": stars,
+                        "forks": forks,
+                        "pushedAt": pushed_at,
+                        "isPriority": is_priority
+                    }))
+                })
+                .collect();
+
+            // Sort priority repos first, then by pushedAt
+            parsed.sort_by(|a, b| {
+                let prio_a = a.get("isPriority").and_then(Value::as_bool).unwrap_or(false);
+                let prio_b = b.get("isPriority").and_then(Value::as_bool).unwrap_or(false);
+                if prio_a != prio_b {
+                    return prio_b.cmp(&prio_a);
+                }
+                let push_a = a.get("pushedAt").and_then(Value::as_str).unwrap_or("");
+                let push_b = b.get("pushedAt").and_then(Value::as_str).unwrap_or("");
+                push_b.cmp(push_a)
+            });
+            parsed.truncate(8);
+
+            (total_stars, parsed)
+        }
+        _ => (0, Vec::new()),
+    };
+
+    // Also attempt to fetch recent issues / PRs if token has scope
+    let issues_req = http
+        .get("https://api.github.com/user/issues?filter=all&state=open&per_page=5")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "Coucou")
+        .send()
+        .await;
+
+    let issue_list: Vec<Value> = match issues_req {
         Ok(r) if r.status().is_success() => r
             .json::<Value>()
             .await
             .ok()
             .and_then(|v| v.as_array().cloned())
-            .map(|list| {
-                list.iter()
-                    .filter_map(|r| r.get("stargazers_count").and_then(Value::as_i64))
-                    .sum()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|it| {
+                let title = it.get("title")?.as_str()?;
+                let url = it.get("html_url").and_then(Value::as_str).unwrap_or("");
+                let is_pr = it.get("pull_request").is_some();
+                let repo = it
+                    .get("repository")
+                    .and_then(|rp| rp.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let number = it.get("number").and_then(Value::as_i64).unwrap_or(0);
+                Some(json!({
+                    "title": title,
+                    "url": url,
+                    "isPr": is_pr,
+                    "repo": repo,
+                    "number": number,
+                }))
             })
-            .unwrap_or(0),
-        _ => 0,
+            .collect(),
+        _ => Vec::new(),
     };
 
     emit(&app, IntegrationUpdate {
         id: "integration_github",
-        data: json!({ "totalRepos": public + private, "totalStars": stars }),
+        data: json!({
+            "totalRepos": public + private,
+            "totalStars": stars,
+            "repos": repo_list,
+            "issues": issue_list
+        }),
         error: None,
         event: None,
     });
@@ -762,4 +867,174 @@ fn fmt_value(v: &Value) -> String {
         Value::Object(_) => "{…}".into(),
         other => other.to_string(),
     }
+}
+
+// ── Google Calendar ──────────────────────────────────────────────────────────
+
+fn current_rfc3339() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = (secs / 86400) as i64;
+    let time_secs = secs % 86400;
+    let hours = time_secs / 3600;
+    let mins = (time_secs % 3600) / 60;
+    let s = time_secs % 60;
+
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, hours, mins, s)
+}
+
+async fn poll_google_calendar(app: AppHandle) {
+    let Some(token) = secrets::get("google-calendar-token") else { return };
+    let http = client();
+
+    let now_iso = current_rfc3339();
+    let url = format!(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin={}&maxResults=8&singleEvents=true&orderBy=startTime",
+        now_iso
+    );
+
+    let response = http
+        .get(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await;
+
+    let Ok(response) = response else { return };
+    if !response.status().is_success() {
+        emit(&app, IntegrationUpdate {
+            id: "integration_google_calendar",
+            data: json!({}),
+            error: Some(status_error(response.status().as_u16(), "OAuth token expired or lacks Calendar scope")),
+            event: None,
+        });
+        return;
+    }
+
+    let json: Value = response.json().await.unwrap_or(json!({}));
+    let events: Vec<Value> = json
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|ev| {
+                    let id = ev.get("id")?.as_str()?;
+                    let title = ev.get("summary").and_then(Value::as_str).unwrap_or("Untitled Event");
+                    let start = ev
+                        .get("start")
+                        .and_then(|s| s.get("dateTime").or_else(|| s.get("date")))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let end = ev
+                        .get("end")
+                        .and_then(|e| e.get("dateTime").or_else(|| e.get("date")))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let location = ev.get("location").and_then(Value::as_str).unwrap_or("");
+                    let html_link = ev.get("htmlLink").and_then(Value::as_str).unwrap_or("https://calendar.google.com");
+                    let meet_link = ev.get("hangoutLink").and_then(Value::as_str).unwrap_or("");
+
+                    Some(json!({
+                        "id": id,
+                        "title": title,
+                        "start": start,
+                        "end": end,
+                        "location": location,
+                        "url": html_link,
+                        "meetUrl": meet_link,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    emit(&app, IntegrationUpdate {
+        id: "integration_google_calendar",
+        data: json!({ "events": events }),
+        error: None,
+        event: None,
+    });
+}
+
+// ── Google Drive ─────────────────────────────────────────────────────────────
+
+async fn poll_google_drive(app: AppHandle) {
+    let Some(token) = secrets::get("google-drive-token") else { return };
+    let http = client();
+
+    let url = "https://www.googleapis.com/drive/v3/files?pageSize=8&orderBy=modifiedTime%20desc&fields=files(id,name,mimeType,webViewLink,modifiedTime,size)";
+
+    let response = http
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await;
+
+    let Ok(response) = response else { return };
+    if !response.status().is_success() {
+        emit(&app, IntegrationUpdate {
+            id: "integration_google_drive",
+            data: json!({}),
+            error: Some(status_error(response.status().as_u16(), "OAuth token expired or lacks Drive scope")),
+            event: None,
+        });
+        return;
+    }
+
+    let json: Value = response.json().await.unwrap_or(json!({}));
+    let files: Vec<Value> = json
+        .get("files")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|f| {
+                    let id = f.get("id")?.as_str()?;
+                    let name = f.get("name").and_then(Value::as_str).unwrap_or("Untitled");
+                    let mime = f.get("mimeType").and_then(Value::as_str).unwrap_or("");
+                    let url = f.get("webViewLink").and_then(Value::as_str).unwrap_or("https://drive.google.com");
+                    let mod_time = f.get("modifiedTime").and_then(Value::as_str).unwrap_or("");
+                    let size_bytes = f.get("size").and_then(|s| s.as_str()).and_then(|s| s.parse::<u64>().ok());
+                    let size_label = size_bytes.map(|b| {
+                        if b >= 1024 * 1024 {
+                            format!("{:.1} MB", b as f64 / (1024.0 * 1024.0))
+                        } else if b >= 1024 {
+                            format!("{} KB", b / 1024)
+                        } else {
+                            format!("{b} B")
+                        }
+                    });
+
+                    Some(json!({
+                        "id": id,
+                        "name": name,
+                        "mimeType": mime,
+                        "url": url,
+                        "modifiedTime": mod_time,
+                        "size": size_label,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    emit(&app, IntegrationUpdate {
+        id: "integration_google_drive",
+        data: json!({ "files": files }),
+        error: None,
+        event: None,
+    });
 }

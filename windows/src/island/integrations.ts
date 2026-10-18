@@ -16,6 +16,8 @@ const KEY_FOR: Record<string, string> = {
   integration_resend: "resend-api-key",
   integration_notion: "notion-api-key",
   integration_calcom: "calcom-api-key",
+  integration_google_calendar: "google-calendar-token",
+  integration_google_drive: "google-drive-token",
 };
 
 const clearTimers = new Map<string, number>();
@@ -25,7 +27,7 @@ export function registerIntegrationHandlers(island: Island) {
   void refreshConfigured();
 }
 
-/** Asks Rust which keys exist so the idle cards can say so. */
+/** Asks Rust which keys exist so the idle cards can say so. Also checks CLI tools. */
 export async function refreshConfigured() {
   for (const [id, key] of Object.entries(KEY_FOR)) {
     const present = (await Bridge.secretPresent(key)) ?? false;
@@ -37,6 +39,12 @@ export async function refreshConfigured() {
     data: {}, error: null, loaded: false, configured: false,
   };
   State.integrations.integration_claude = { ...claude, configured: hooks };
+
+  // Check CLI tools availability
+  const tools = await Bridge.checkCliTools();
+  if (tools && tools.length > 0) {
+    State.cliTools = tools;
+  }
   State.notify();
 }
 

@@ -433,6 +433,10 @@ const INTEGRATIONS: IntegrationDef[] = [
     fields: [{ key: "notion-api-key", label: "Integration token", placeholder: "ntn_…", secret: true }] },
   { id: "integration_calcom", name: "Cal.com", color: "#C9956A",
     fields: [{ key: "calcom-api-key", label: "API key", placeholder: "cal_…", secret: true }] },
+  { id: "integration_google_calendar", name: "Google Calendar", color: "#4285F4",
+    fields: [{ key: "google-calendar-token", label: "OAuth / Access Token", placeholder: "ya29.…", secret: true }] },
+  { id: "integration_google_drive", name: "Google Drive", color: "#34A853",
+    fields: [{ key: "google-drive-token", label: "OAuth / Access Token", placeholder: "ya29.…", secret: true }] },
 ];
 
 const MAX_ACTIVE = 4;

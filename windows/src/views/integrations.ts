@@ -51,17 +51,33 @@ const OPEN_URLS: Record<string, string> = {
   integration_stripe: "https://dashboard.stripe.com/payments",
   integration_notion: "https://notion.so",
   integration_calcom: "https://app.cal.com/bookings",
+  integration_google_calendar: "https://calendar.google.com",
+  integration_google_drive: "https://drive.google.com",
+  integration_tradingview: "https://www.tradingview.com/chart/?symbol=OANDA:XAUUSD",
 };
 
 function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
   const info = State.integrations[task.id];
   const configured = info?.configured ?? false;
   const error = info?.error ?? null;
-  // The Claude Code pill is about hooks, not a key — the macOS wording would be
-  // misleading here.
-  const missing = task.id === "integration_claude" ? "Hooks not installed" : "Key not configured";
-  const label = error ?? (configured ? "Connected · loading…" : missing);
-  const statusColor = error || !configured ? "#F4505E" : "#22C55E";
+
+  // Check if this task represents a CLI tool
+  const cliId = task.id === "agent_claude_cli" ? "claude"
+    : task.id === "agent_gemini" ? "gemini"
+    : task.id === "agent_antigravity" ? "antigravity"
+    : task.id === "agent_codex" ? "codex" : null;
+
+  const cliTool = cliId ? State.cliTools.find((t) => t.id === cliId) : null;
+  const isCli = !!cliId;
+
+  const missing = isCli
+    ? (cliTool?.installed ? `Installed · ${cliTool.version ?? "ready"}` : "CLI not found")
+    : task.id === "integration_claude" ? "Hooks not installed"
+    : task.id === "integration_tradingview" ? "Chart ready"
+    : "Token not configured";
+
+  const label = error ?? (isCli ? missing : configured ? "Connected · loading…" : missing);
+  const statusColor = error ? "#F4505E" : isCli ? (cliTool?.installed ? "#22C55E" : "#F4505E") : (!configured && task.id !== "integration_tradingview" ? "#F4505E" : "#22C55E");
 
   const actions = h("div", { class: "int-actions" });
   if (task.id === "integration_claude") {
@@ -73,6 +89,26 @@ function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
         onclick: () => void Bridge.openInVSCode(task.sessionCwd ?? null),
       }),
     );
+  } else if (isCli && cliTool) {
+    if (cliTool.installed) {
+      actions.append(
+        h("button", {
+          class: "link-btn",
+          style: `color:${task.color}d9`,
+          text: `Launch ${cliTool.name}`,
+          onclick: () => void Bridge.launchCliTool(cliTool.id, null),
+        }),
+      );
+    } else {
+      actions.append(
+        h("button", {
+          class: "link-btn",
+          style: "color:#8e939c",
+          text: "Copy Install Hint",
+          onclick: () => void navigator.clipboard?.writeText(cliTool.diagnostic),
+        }),
+      );
+    }
   } else if (task.id === "integration_n8n") {
     actions.append(
       h("button", {
@@ -315,6 +351,68 @@ function calcomCard(): HTMLElement {
   return h("div", { class: "int-card" }, header("#C9956A", "Cal.com", "Schedule"), rows);
 }
 
+// ── Google Calendar ───────────────────────────────────────────────────────────
+
+function googleCalendarCard(): HTMLElement {
+  const events = arr("integration_google_calendar", "events");
+  const rows = h("div", { class: "int-rows tight" });
+  if (events.length === 0) {
+    rows.append(h("div", { class: "int-empty", text: "No upcoming events" }));
+  }
+  for (const ev of events.slice(0, 3)) {
+    const when = ev.start ? new Date(String(ev.start)) : null;
+    const timeStr = when
+      ? when.toLocaleDateString(undefined, { day: "2-digit", month: "2-digit" }) +
+        " " +
+        when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+      : "Upcoming";
+    rows.append(
+      h(
+        "button",
+        {
+          class: "int-page",
+          onclick: () => {
+            if (typeof ev.htmlLink === "string") void Bridge.openUrl(ev.htmlLink);
+            else void Bridge.openUrl("https://calendar.google.com");
+          },
+        },
+        dot("#4285F4", 4),
+        h("span", { class: "int-name", text: String(ev.summary ?? "Event") }),
+        h("span", { class: "int-ago", text: timeStr }),
+      ),
+    );
+  }
+  return h("div", { class: "int-card" }, header("#4285F4", "Google Calendar", "Agenda"), rows);
+}
+
+// ── Google Drive ──────────────────────────────────────────────────────────────
+
+function googleDriveCard(): HTMLElement {
+  const files = arr("integration_google_drive", "files");
+  const rows = h("div", { class: "int-rows tight" });
+  if (files.length === 0) {
+    rows.append(h("div", { class: "int-empty", text: "No recent files" }));
+  }
+  for (const f of files.slice(0, 3)) {
+    rows.append(
+      h(
+        "button",
+        {
+          class: "int-page",
+          onclick: () => {
+            if (typeof f.webViewLink === "string") void Bridge.openUrl(f.webViewLink);
+            else void Bridge.openUrl("https://drive.google.com");
+          },
+        },
+        h("i", { class: "int-emoji" }, svg(ICONS.doc, 9)),
+        h("span", { class: "int-name", text: String(f.name ?? "File") }),
+        h("span", { class: "int-ago", text: timeAgo(f.modifiedTime) }),
+      ),
+    );
+  }
+  return h("div", { class: "int-card" }, header("#34A853", "Google Drive", "Files"), rows);
+}
+
 // ── n8n ───────────────────────────────────────────────────────────────────────
 
 function n8nCard(task: AgentTask, onDetail: () => void, openSettings: () => void): HTMLElement {
@@ -398,6 +496,10 @@ export function hasIntegrationData(id: string): boolean {
       return arr(id, "pages").length > 0;
     case "integration_calcom":
       return info.loaded;
+    case "integration_google_calendar":
+      return arr(id, "events").length > 0;
+    case "integration_google_drive":
+      return arr(id, "files").length > 0;
     default:
       return false;
   }
@@ -426,6 +528,10 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
       return notionCard();
     case "integration_calcom":
       return calcomCard();
+    case "integration_google_calendar":
+      return googleCalendarCard();
+    case "integration_google_drive":
+      return googleDriveCard();
     default:
       return idleCard(task, hooks.openSettings);
   }
